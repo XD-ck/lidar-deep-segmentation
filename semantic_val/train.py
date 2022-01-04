@@ -78,6 +78,24 @@ def train(config: DictConfig) -> Optional[float]:
 
     # Train the model
     if config.get("fit_the_model"):
+        if config.trainer.auto_lr_find:
+            log.info("Finding best lr with auto_lr_find!")
+            # Run learn ing rate finder
+            lr_finder = trainer.tuner.lr_find(model, datamodule=datamodule)
+
+            # Results can be found in
+            lr_finder.results
+
+            # Plot with
+            fig = lr_finder.plot(suggest=True)
+            fig.show()
+
+            # Pick point based on plot, or get suggestion
+            new_lr = lr_finder.suggestion()
+
+            # update hparams of the model
+            model.hparams.lr = new_lr
+
         log.info("Starting training!")
         trainer.fit(model=model, datamodule=datamodule)
 
