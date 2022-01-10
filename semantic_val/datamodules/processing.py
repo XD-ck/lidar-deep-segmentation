@@ -306,15 +306,21 @@ class CustomNormalizeFeatures(BaseTransform):
     def __call__(self, data: Data):
 
         intensity_idx = data.x_features_names.index("intensity")
-        data.x[:, intensity_idx] = data.x[:, intensity_idx] / INTENSITY_MAX - HALF_UNIT
+
+        data.x[:, intensity_idx] = (
+            data.x[:, intensity_idx] / data.x[:, intensity_idx].max() - HALF_UNIT
+        )
 
         colors_idx = [
             data.x_features_names.index(color_name) for color_name in COLORS_NAMES
         ]
+        return_num_idx = data.x_features_names.index("return_num")
+
+        # Reserved -0.75 value for occluded points colors, outside of -0.5-0.5 normal range.
         for color_idx in colors_idx:
             data.x[:, color_idx] = data.x[:, color_idx] / COLORS_MAX - HALF_UNIT
+            data.x[data.x[:, return_num_idx] > 1, color_idx] = -1.5 * HALF_UNIT
 
-        return_num_idx = data.x_features_names.index("return_num")
         data.x[:, return_num_idx] = (data.x[:, return_num_idx] - UNIT) / (
             RETURN_NUM_MAX - UNIT
         ) - HALF_UNIT
