@@ -19,6 +19,8 @@ log = utils.get_logger(__name__)
 # CONSTANTS
 UNIT = 1
 HALF_UNIT = 0.5
+COLOR_CLAMPING_BELOW_ZERO = -5  # negative
+OCCLUDED_POINTS_FILL_VALUE = -7.5  # negative, lower than COLOR_CLAMPING_BELOW_ZERO
 
 
 def load_las_data(
@@ -239,24 +241,17 @@ class CustomNormalizeFeatures(BaseTransform):
         self.standard_colors_names = ["red", "green", "blue", "nir"]
         self.colors_normalization_max_value = colors_normalization_max_value
         self.return_num_normalization_max_value = return_num_normalization_max_value
+        self.ccbz = COLOR_CLAMPING_BELOW_ZERO
+        self.opfv = OCCLUDED_POINTS_FILL_VALUE
 
     def __call__(self, data: Data):
 
         intensity_idx = data.x_features_names.index("intensity")
-        data.x[:, intensity_idx] = (
-            data.x[:, intensity_idx] / data.x[:, intensity_idx].max() - HALF_UNIT
-        )
+        data.x[:, intensity_idx] = self._standardize_channel(data.x[:, intensity_idx])
+        data.x[:, intensity_idx] = data.x[:, intensity_idx].clamp(min=self.ccbz)
 
         return_num_idx = data.x_features_names.index("return_num")
-        colors_idx = []
-        for color_name in self.standard_colors_names:
-            if color_name in data.x_features_names:
-                colors_idx.append(data.x_features_names.index(color_name))
-        for color_idx in colors_idx:
-            data.x[:, color_idx] = (
-                data.x[:, color_idx] / self.colors_normalization_max_value - HALF_UNIT
-            )
-            data.x[data.x[:, return_num_idx] > 1, color_idx] = -1.5 * HALF_UNIT
+        occluded_points_mask = data.x[:, return_num_idx] > 1
 
         data.x[:, return_num_idx] = (data.x[:, return_num_idx] - UNIT) / (
             self.return_num_normalization_max_value - UNIT
@@ -266,7 +261,20 @@ class CustomNormalizeFeatures(BaseTransform):
             self.return_num_normalization_max_value - UNIT
         ) - HALF_UNIT
 
+        for color_name in self.standard_colors_names:
+            if color_name in data.x_features_names:
+                color_idx = data.x_features_names.index(color_name)
+                data.x[:, color_idx] = self._standardize_channel(data.x[:, color_idx])
+                data.x[:, color_idx] = data.x[:, color_idx].clamp(min=self.ccbz)
+                data.x[occluded_points_mask, color_idx] = self.opfv
+
         return data
+
+    def _standardize_channel(self, channel_data):
+        """Sample-wise standardization y* = (y-y_mean)/y_std"""
+        mean = channel_data.mean()
+        std = channel_data.std()
+        return (channel_data - mean) / std
 
 
 class CustomNormalizeScale(BaseTransform):
