@@ -141,7 +141,7 @@ class Model(LightningModule):
         modes, _ = knn_preds.mode(dim=1)
         mode_freq = (knn_preds == modes.unsqueeze(1)).sum(dim=1) / k
         majority_mask = mode_freq >= 0.5
-        classified_points_mask = preds > 0
+        classified_points_mask = preds > 1
         mask = classified_points_mask * majority_mask
         preds[mask] = modes[mask]
         return preds
