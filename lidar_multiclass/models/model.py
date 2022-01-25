@@ -127,6 +127,8 @@ class Model(LightningModule):
         logits = self.forward(batch)
         proba = self.softmax(logits)
         preds = torch.argmax(logits, dim=1)
+        if self.hparams.classification_smoothing_k_nn:
+            preds = self.smooth_preds(batch, preds)
         return {"batch": batch, "proba": proba, "preds": preds}
 
     def smooth_preds(self, batch, preds):
