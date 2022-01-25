@@ -137,13 +137,13 @@ class Model(LightningModule):
         assign_idx = knn(
             batch.pos, batch.pos, k, batch_x=batch.batch_x, batch_y=batch.batch_x
         )
-        knn_preds = preds[assign_idx[1]].float().view(-1, k)
+        knn_preds = preds[assign_idx[1]].view(-1, k)
         modes, _ = knn_preds.mode(dim=1)
         mode_freq = (knn_preds == modes.unsqueeze(1)).sum(dim=1) / k
         majority_mask = mode_freq >= 0.5
         classified_points_mask = preds > 0
         mask = classified_points_mask * majority_mask
-        preds[mask] = modes[mask].numpy()
+        preds[mask] = modes[mask]
         return preds
 
     def get_neural_net_class(self, class_name):
