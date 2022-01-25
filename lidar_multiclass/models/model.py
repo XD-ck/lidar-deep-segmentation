@@ -2,6 +2,7 @@ from typing import Any, Optional
 import torch
 from pytorch_lightning import LightningModule
 from torch import nn
+from torch_geometric.nn.pool import knn
 from torch_geometric.data import Batch
 from torchmetrics import MaxMetric
 from lidar_multiclass.models.modules.randla_net import RandLANet
@@ -86,8 +87,10 @@ class Model(LightningModule):
 
     def validation_step(self, batch: Any, batch_idx: int):
         loss, _, proba, preds, targets = self.step(batch)
-        self.val_iou(preds, targets)
         self.log("val/loss", loss, on_step=True, on_epoch=True)
+        if self.hparams.classification_smoothing_k_nn:
+            preds = self.smooth_preds(batch, preds)
+        self.val_iou(preds, targets)
         self.log("val/iou", self.val_iou, on_step=True, on_epoch=True, prog_bar=True)
         return {
             "loss": loss,
@@ -108,6 +111,8 @@ class Model(LightningModule):
     def test_step(self, batch: Any, batch_idx: int):
         loss, _, proba, preds, targets = self.step(batch)
         self.log("test/loss", loss, on_step=True, on_epoch=True)
+        if self.hparams.classification_smoothing_k_nn:
+            preds = self.smooth_preds(batch, preds)
         self.test_iou(preds, targets)
         self.log("test/iou", self.test_iou, on_step=True, on_epoch=True, prog_bar=True)
         return {
@@ -123,6 +128,23 @@ class Model(LightningModule):
         proba = self.softmax(logits)
         preds = torch.argmax(logits, dim=1)
         return {"batch": batch, "proba": proba, "preds": preds}
+
+    def smooth_preds(self, batch, preds):
+        """KNN consensus smoothing for preds, except for class "unclassified"."""
+        k = self.hparams.classification_smoothing_k_nn
+
+        preds = preds.clone()
+        assign_idx = knn(
+            batch.pos, batch.pos, k, batch_x=batch.batch_x, batch_y=batch.batch_x
+        )
+        knn_preds = preds[assign_idx[1]].float().view(-1, k)
+        modes, _ = knn_preds.mode(dim=1)
+        mode_freq = (knn_preds == modes.unsqueeze(1)).sum(dim=1) / k
+        majority_mask = mode_freq >= 0.5
+        classified_points_mask = preds > 0
+        mask = classified_points_mask * majority_mask
+        preds[mask] = modes[mask].numpy()
+        return preds
 
     def get_neural_net_class(self, class_name):
         """Access class of neural net based on class name."""

@@ -24,6 +24,11 @@ lr: 0.004566395347136576  # 200-long LR-test-range betw 10^-4 and 3.0
 momentum: 0.9  # arbitrary
 monitor: "val/loss_epoch"
 
+
+# Consensus smoothing - set to 10 to activate at evaluation time
+# Compute-intensive, thus deactivated during training.
+classification_smoothing_k_nn: 0
+
 defaults:
   - optimizer: Adam.yaml
   - lr_scheduler: ReduceLROnPlateau.yaml

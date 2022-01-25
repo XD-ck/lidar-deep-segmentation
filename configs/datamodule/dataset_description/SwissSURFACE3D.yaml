@@ -2,6 +2,7 @@
 # In particular: from cmbining SwissSURFACE3D and SwissIMAGE10cm
 
 # classification_dict = {int: name, ...} and MUST be sorted (increasing order).
+# unclassified, for which classification will not be smoother, needs to be the first class.
 classification_dict: {1: "unclassified", 2: "ground", 3: "vegetation", 6: "building", 9: "water", 17: "bridge"}
 # features_names to include. You must use names from LAS convention for standard channels.
 # XYZ will also be included.
