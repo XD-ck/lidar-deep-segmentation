@@ -255,3 +255,4 @@ class ChannelNames(Enum):
 
     PredictedClassification = "PredictedClassification"
     ProbasEntropy = "entropy"
+    MCDropoutStandardDeviation = "mc_dropout_std"

@@ -53,6 +53,8 @@ class Interpolator:
         batch_classification = outputs["preds"].detach()
         if "entropy" in outputs:
             batch_entropy = outputs["entropy"].detach()
+        if "mc_dropout" in outputs:
+            batch_mc_dropout = outputs["mc_dropout"].detach()
         batch_probas = outputs["proba"][:, self.index_of_probas_to_save].detach()
         for batch_idx, las_filepath in enumerate(batch.las_filepath):
             is_a_new_tile = las_filepath != self.current_las_filepath
@@ -67,6 +69,8 @@ class Interpolator:
             self.updates_probas_subsampled.append(batch_probas[idx_x])
             if "entropy" in outputs:
                 self.updates_entropy_subsampled.append(batch_entropy[idx_x])
+            if "mc_dropout" in outputs:
+                self.updates_mc_drouput_std_subsampled.append(batch_mc_dropout[idx_x])
             self.updates_pos_subsampled.append(batch.pos_copy_subsampled[idx_x])
             idx_y = batch.batch_y == batch_idx
             self.updates_pos.append(batch.pos_copy[idx_y])
@@ -89,6 +93,13 @@ class Interpolator:
         self.las.add_extra_dim(param)
         self.las[ChannelNames.ProbasEntropy.value][:] = 0.0
 
+        # TODO: conditional creation
+        param = laspy.ExtraBytesParams(
+            name=ChannelNames.MCDropoutStandardDeviation.value, type=float
+        )
+        self.las.add_extra_dim(param)
+        self.las[ChannelNames.MCDropoutStandardDeviation.value][:] = 0.0
+
         for class_name in self.names_of_probas_to_save:
             param = laspy.ExtraBytesParams(name=class_name, type=float)
             self.las.add_extra_dim(param)
@@ -107,6 +118,7 @@ class Interpolator:
         self.updates_classification_subsampled = []
         self.updates_probas_subsampled = []
         self.updates_entropy_subsampled = []
+        self.updates_mc_drouput_std_subsampled = []
         self.updates_pos_subsampled = []
         self.updates_pos = []
 
@@ -136,7 +148,10 @@ class Interpolator:
             self.updates_entropy_subsampled = torch.cat(
                 self.updates_entropy_subsampled
             ).cpu()
-
+        if len(self.updates_mc_drouput_std_subsampled):
+            self.updates_mc_drouput_std_subsampled = torch.cat(
+                self.updates_mc_drouput_std_subsampled
+            ).cpu()
         # Remap predictions to good classification codes
         self.updates_classification_subsampled = np.vectorize(
             self.reverse_classification_mapper.get
@@ -158,7 +173,10 @@ class Interpolator:
         self.updates_probas = self.updates_probas_subsampled[assign_idx]
         if len(self.updates_entropy_subsampled):
             self.updates_entropy = self.updates_entropy_subsampled[assign_idx]
-
+        if len(self.updates_mc_drouput_std_subsampled):
+            self.updates_mc_dropout_std = self.updates_mc_drouput_std_subsampled[
+                assign_idx
+            ]
         # Only update channels for points with a predicted point that is close enough
         nn_pos = self.updates_pos_subsampled[assign_idx]
         euclidian_distance = torch.sqrt(((self.las_pos - nn_pos) ** 2).sum(axis=1))
@@ -176,6 +194,10 @@ class Interpolator:
             self.las[ChannelNames.ProbasEntropy.value][
                 close_enough_with_preds
             ] = self.updates_entropy[close_enough_with_preds]
+        if len(self.updates_mc_dropout_std):
+            self.las[ChannelNames.MCDropoutStandardDeviation.value][
+                close_enough_with_preds
+            ] = self.updates_mc_dropout_std[close_enough_with_preds]
 
         log.info(f"Saving...")
         self.las.write(self.output_path)

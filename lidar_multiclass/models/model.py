@@ -5,6 +5,7 @@ from torch import nn
 from torch.distributions import Categorical
 from torch_geometric.data import Batch
 from torchmetrics import MaxMetric
+from tqdm import tqdm
 from lidar_multiclass.models.modules.randla_net import RandLANet
 from lidar_multiclass.models.modules.point_net import PointNet
 from lidar_multiclass.utils import utils
@@ -127,6 +128,42 @@ class Model(LightningModule):
         preds = torch.argmax(logits, dim=1)
         entropy = Categorical(probs=proba).entropy()
         return {"batch": batch, "proba": proba, "preds": preds, "entropy": entropy}
+
+    def make_stochastic_forward_fc_end(self):
+        self.model.fc_end[-2] = self.model.fc_end[-2].train()
+        scores = self.model.fc_end(self.model.pre_fc_end_x)
+        # TODO: abstract this reshape of scores
+        scores = scores.squeeze(-1)  # B, C, N
+        scores = torch.cat(
+            [score_cloud.permute(1, 0) for score_cloud in scores]
+        )  # B*N, C
+        proba = self.softmax(scores)
+        return proba
+
+    def monte_carlo_predict_step(self, batch: Any):
+        outputs = self.predict_step(batch)
+
+        probas = []
+        for _ in tqdm(range(200)):
+            probas += [self.make_stochastic_forward_fc_end()]
+        concats = torch.cat([p.unsqueeze(0) for p in probas])
+        probas_predictive_mean = torch.mean(concats, dim=0)
+        # TODO: replace max with use of chosen preds ! Or sum ?
+
+        preds = torch.argmax(probas_predictive_mean, dim=1)
+        probas_predictive_std = torch.std(concats, dim=0)
+        probas_predictive_std = probas_predictive_std[range(preds.shape[0]), preds]
+        entropy = Categorical(probs=probas_predictive_mean).entropy()
+
+        outputs.update(
+            {
+                "proba": probas_predictive_mean,
+                "preds": preds,
+                "entropy": entropy,
+                "mc_dropout": probas_predictive_std,
+            }
+        )
+        return outputs
 
     def get_neural_net_class(self, class_name):
         """Access class of neural net based on class name."""

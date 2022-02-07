@@ -52,10 +52,11 @@ def predict(config: DictConfig) -> Optional[float]:
         enumerate(datamodule.predict_dataloader()), desc="Infering probabilities..."
     ):
         batch.to(device)
-        outputs = model.predict_step(batch)
+        outputs = model.monte_carlo_predict_step(batch)
         data_handler.update_with_inference_outputs(outputs)
-        # if index >= 1:
-        #     break  ###### TODO - this is for debugging purposes ###################
+
+        if index >= 1:
+            break  ###### TODO - this is for debugging purposes ###################
 
     updated_las_path = data_handler.interpolate_and_save("predict")
     log.info(f"Updated LAS saved to : {updated_las_path}")

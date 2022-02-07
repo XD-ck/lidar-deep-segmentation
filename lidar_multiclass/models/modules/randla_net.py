@@ -302,6 +302,9 @@ class RandLANet(nn.Module):
         # inverse permutation
         x = x[:, :, torch.argsort(permutation)]
 
+        # TODO: make this happen only in predict mode !
+        self.pre_fc_end_x = x.detach().clone()
+
         scores = self.fc_end(x)
 
         scores = scores.squeeze(-1)  # B, C, N
