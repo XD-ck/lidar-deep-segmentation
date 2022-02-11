@@ -3,6 +3,7 @@ import torch
 from pytorch_lightning import LightningModule
 from torch import nn
 from torch.distributions import Categorical
+import torch_geometric
 from torch_geometric.data import Batch
 from torchmetrics import MaxMetric
 from tqdm import tqdm
@@ -129,38 +130,40 @@ class Model(LightningModule):
         entropy = Categorical(probs=proba).entropy()
         return {"batch": batch, "proba": proba, "preds": preds, "entropy": entropy}
 
-    def make_stochastic_forward_fc_end(self):
+    def stochastic_forward_fc_end(self):
         self.model.fc_end[-2] = self.model.fc_end[-2].train()
-        scores = self.model.fc_end(self.model.pre_fc_end_x)
+        logits = self.model.fc_end(self.model.pre_fc_end_x)
         # TODO: abstract this reshape of scores
-        scores = scores.squeeze(-1)  # B, C, N
-        scores = torch.cat(
-            [score_cloud.permute(1, 0) for score_cloud in scores]
+        logits = logits.squeeze(-1)  # B, C, N
+        logits = torch.cat(
+            [score_cloud.permute(1, 0) for score_cloud in logits]
         )  # B*N, C
-        proba = self.softmax(scores)
-        return proba
+        return logits
 
-    def monte_carlo_predict_step(self, batch: Any):
+    def monte_carlo_predict_step(
+        self, batch: torch_geometric.data.Data, n_stochastic_pass: int = 25
+    ):
         outputs = self.predict_step(batch)
 
-        probas = []
-        for _ in tqdm(range(200)):
-            probas += [self.make_stochastic_forward_fc_end()]
-        concats = torch.cat([p.unsqueeze(0) for p in probas])
-        probas_predictive_mean = torch.mean(concats, dim=0)
-        # TODO: replace max with use of chosen preds ! Or sum ?
-
-        preds = torch.argmax(probas_predictive_mean, dim=1)
-        probas_predictive_std = torch.std(concats, dim=0)
-        probas_predictive_std = probas_predictive_std[range(preds.shape[0]), preds]
-        entropy = Categorical(probs=probas_predictive_mean).entropy()
+        logits = []
+        for _ in tqdm(range(n_stochastic_pass)):
+            logits += [self.stochastic_forward_fc_end()]
+        concats = torch.cat([s.unsqueeze(0) for s in logits])
+        logits_std = torch.std(concats, dim=0)
+        logits_sum = torch.sum(concats, dim=0)
+        probas = self.softmax(logits_sum)
+        preds = torch.argmax(logits_sum, dim=1)
+        logits_std = logits_std[range(preds.shape[0]), preds]
+        # TODO: Other uncertainty indicators could be used like max relative value of logits / proba ?
+        # TODO: Using average logits should not change entropy here, but test it !
+        entropy = Categorical(logits=logits_sum).entropy()
 
         outputs.update(
             {
-                "proba": probas_predictive_mean,
+                "proba": probas,
                 "preds": preds,
                 "entropy": entropy,
-                "mc_dropout": probas_predictive_std,
+                "mc_dropout": logits_std,
             }
         )
         return outputs
