@@ -118,7 +118,7 @@ class DataModule(LightningDataModule):
             ),
         )
 
-    def _set_predict_data(self, files_to_infer_on: List[AnyStr]):
+    def _set_predict_data(self, files_to_infer_on: List[AnyStr], subtiles_overlap=0):
         """This is used in predict.py, with a single file in a list."""
         self.predict_data = LidarIterableDataset(
             files_to_infer_on,
@@ -126,6 +126,7 @@ class DataModule(LightningDataModule):
             transform=self._get_predict_transforms(),
             target_transform=None,
             subtile_width_meters=self.subtile_width_meters,
+            subtiles_overlap=subtiles_overlap,
         )
 
     def train_dataloader(self):
@@ -248,12 +249,15 @@ class LidarIterableDataset(IterableDataset):
         transform=None,
         target_transform=None,
         subtile_width_meters: float = 50,
+        subtiles_overlap=0,
     ):
         self.files = files
         self.loading_function = loading_function
         self.transform = transform
         self.target_transform = target_transform
         self.subtile_width_meters = subtile_width_meters
+        self.subtiles_overlap = subtiles_overlap
+        assert self.subtiles_overlap < (0.8 * self.subtile_width_meters)
 
     @utils.eval_time
     def yield_transformed_subtile_data(self):
@@ -279,16 +283,16 @@ class LidarIterableDataset(IterableDataset):
 
     def get_all_subtiles_xy_min_corner(self, data: Data):
         """Get centers of square subtiles of specified width, assuming rectangular form of input cloud."""
-
         low = data.pos[:, :2].min(0)
         high = data.pos[:, :2].max(0)
+        tts = self.subtiles_overlap
         xy_min_corners = [
             np.array([x, y])
             for x in np.arange(
-                start=low[0], stop=high[0] + 1, step=self.subtile_width_meters
+                start=low[0], stop=high[0] + 1, step=self.subtile_width_meters - tts
             )
             for y in np.arange(
-                start=low[1], stop=high[1] + 1, step=self.subtile_width_meters
+                start=low[1], stop=high[1] + 1, step=self.subtile_width_meters - tts
             )
         ]
         # random.shuffle(centers)

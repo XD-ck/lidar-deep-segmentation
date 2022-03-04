@@ -5,6 +5,7 @@ from omegaconf import DictConfig, OmegaConf
 from typing import Optional
 from pytorch_lightning import LightningDataModule, LightningModule
 from tqdm import tqdm
+from torch.distributions import Categorical
 
 from lidar_multiclass.utils import utils
 from lidar_multiclass.datamodules.interpolation import Interpolator

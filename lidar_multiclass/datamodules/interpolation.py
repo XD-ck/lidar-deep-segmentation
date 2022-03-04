@@ -5,6 +5,7 @@ import laspy
 import numpy as np
 import torch
 from torch_geometric.nn.pool import knn
+from torch.distributions import Categorical
 
 from lidar_multiclass.utils import utils
 from lidar_multiclass.utils import utils
@@ -22,6 +23,9 @@ class Interpolator:
         output_dir: str,
         classification_dict: Dict[int, str],
         names_of_probas_to_save: List[str] = [],
+        test_time_augmentation: bool = False,
+        PredictedClassification="PredictedClassification",
+        ProbasEntropy="entropy",
     ):
 
         os.makedirs(output_dir, exist_ok=True)
@@ -29,6 +33,11 @@ class Interpolator:
         self.current_las_filepath = ""
         self.classification_dict = classification_dict
         self.names_of_probas_to_save = names_of_probas_to_save
+        self.test_time_augmentation = test_time_augmentation
+        self.PredictedClassification = PredictedClassification
+        self.ProbasEntropy = ProbasEntropy
+
+        self.softmax = torch.nn.Softmax(dim=1)
 
         self.reverse_classification_mapper = {
             class_index: class_code
@@ -49,10 +58,7 @@ class Interpolator:
         :param outputs: outputs of a step.
         """
         batch = outputs["batch"].detach()
-        batch_classification = outputs["preds"].detach()
-        if "entropy" in outputs:
-            batch_entropy = outputs["entropy"].detach()
-        batch_probas = outputs["proba"][:, self.index_of_probas_to_save].detach()
+        batch_logits = outputs["logits"][:, self.index_of_probas_to_save].detach()
         for batch_idx, las_filepath in enumerate(batch.las_filepath):
             is_a_new_tile = las_filepath != self.current_las_filepath
             if is_a_new_tile:
@@ -60,12 +66,8 @@ class Interpolator:
                 if close_previous_las_first:
                     self.interpolate_and_save()
                 self._load_las_for_classification_update(las_filepath)
-
             idx_x = batch.batch_x == batch_idx
-            self.updates_classification_subsampled.append(batch_classification[idx_x])
-            self.updates_probas_subsampled.append(batch_probas[idx_x])
-            if "entropy" in outputs:
-                self.updates_entropy_subsampled.append(batch_entropy[idx_x])
+            self.updates_logits_subsampled.append(batch_logits[idx_x])
             self.updates_pos_subsampled.append(batch.pos_copy_subsampled[idx_x])
             idx_y = batch.batch_y == batch_idx
             self.updates_pos.append(batch.pos_copy[idx_y])
@@ -76,16 +78,14 @@ class Interpolator:
         self.las = laspy.read(filepath)
         self.current_las_filepath = filepath
 
-        coln = ChannelNames.PredictedClassification.value
+        coln = self.PredictedClassification
         param = laspy.ExtraBytesParams(name=coln, type=int)
         self.las.add_extra_dim(param)
         self.las[coln][:] = 0
 
-        param = laspy.ExtraBytesParams(
-            name=ChannelNames.ProbasEntropy.value, type=float
-        )
+        param = laspy.ExtraBytesParams(name=self.ProbasEntropy, type=float)
         self.las.add_extra_dim(param)
-        self.las[ChannelNames.ProbasEntropy.value][:] = 0.0
+        self.las[self.ProbasEntropy][:] = 0.0
 
         for class_name in self.names_of_probas_to_save:
             param = laspy.ExtraBytesParams(name=class_name, type=float)
@@ -102,9 +102,7 @@ class Interpolator:
                 dtype=np.float32,
             ).transpose()
         )
-        self.updates_classification_subsampled = []
-        self.updates_probas_subsampled = []
-        self.updates_entropy_subsampled = []
+        self.updates_logits_subsampled = []
         self.updates_pos_subsampled = []
         self.updates_pos = []
 
@@ -124,14 +122,21 @@ class Interpolator:
         # Cat
         self.updates_pos = torch.cat(self.updates_pos).cpu()
         self.updates_pos_subsampled = torch.cat(self.updates_pos_subsampled).cpu()
-        self.updates_probas_subsampled = torch.cat(self.updates_probas_subsampled).cpu()
-        self.updates_classification_subsampled = torch.cat(
-            self.updates_classification_subsampled
-        ).cpu()
-        if len(self.updates_entropy_subsampled):
-            self.updates_entropy_subsampled = torch.cat(
-                self.updates_entropy_subsampled
-            ).cpu()
+        self.updates_logits_subsampled = torch.cat(self.updates_logits_subsampled).cpu()
+
+        if self.test_time_augmentation:
+            # TODO: get a unique value by position for self.update_logits
+
+            pass
+
+        # Here create missing channels
+        self.updates_classification_subsampled = torch.argmax(
+            self.updates_logits_subsampled, dim=1
+        )
+        self.updates_probas_subsampled = self.softmax(self.updates_logits_subsampled)
+        self.updates_entropy_subsampled = Categorical(
+            probs=self.updates_probas_subsampled
+        ).entropy()
 
         # Remap predictions to good classification codes
         self.updates_classification_subsampled = np.vectorize(
@@ -169,7 +174,7 @@ class Interpolator:
             close_enough_with_preds
         ] = self.updates_classification[close_enough_with_preds]
         if len(self.updates_entropy):
-            self.las[ChannelNames.ProbasEntropy.value][
+            self.las[self.ProbasEntropy][
                 close_enough_with_preds
             ] = self.updates_entropy[close_enough_with_preds]
 
@@ -185,6 +190,6 @@ class Interpolator:
         del self.updates_pos
         del self.updates_classification_subsampled
         del self.updates_classification
-        del self.updates_probas_subsampled
+        del self.updates_logits_subsampled
 
         return self.output_path

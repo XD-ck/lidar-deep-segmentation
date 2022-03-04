@@ -19,27 +19,56 @@ def main(config: DictConfig):
     assert os.path.exists(config.predict.resume_from_checkpoint)
     assert os.path.exists(config.predict.src_las)
 
-    datamodule: LightningDataModule = hydra.utils.instantiate(config.datamodule)
-    datamodule._set_predict_data([config.predict.src_las])
-
     model: LightningModule = hydra.utils.instantiate(config.model)
     model = model.load_from_checkpoint(config.predict.resume_from_checkpoint)
     device = utils.define_device_from_config_param(config.predict.gpus)
     model.to(device)
     model.eval()
 
+    datamodule: LightningDataModule = hydra.utils.instantiate(config.datamodule)
+
+    # METHOD 1
+    datamodule._set_predict_data([config.predict.src_las])
     data_handler = Interpolator(
         config.predict.output_dir,
         datamodule.dataset_description.get("classification_dict"),
         names_of_probas_to_save=config.predict.names_of_probas_to_save,
     )
-
     for batch in tqdm(datamodule.predict_dataloader()):
         batch.to(device)
         outputs = model.predict_step(batch)
         data_handler.update_with_inference_outputs(outputs)
 
     updated_las_path = data_handler.interpolate_and_save()
+
+    # METHOD 2 - test_time_augmentation=True
+    c_names = [
+        a.replace("NoShiftSubset", "Shift")
+        for a in config.predict.names_of_probas_to_save
+    ]
+    datamodule.dataset_description["classification_dict"] = {
+        k: v.replace("NoShiftSubset", "Shift")
+        for k, v in datamodule.dataset_description.get("classification_dict").items()
+    }
+
+    datamodule._set_predict_data(
+        [updated_las_path], subtiles_overlap=config.subtiles_overlap
+    )
+    data_handler = Interpolator(
+        config.predict.output_dir,
+        datamodule.dataset_description.get("classification_dict"),
+        names_of_probas_to_save=c_names,
+        test_time_augmentation=True,
+        PredictedClassification="ShiftSUbset_PredictedClassification",
+        ProbasEntropy="ShiftSUbset_entropy",
+    )
+    for batch in tqdm(datamodule.predict_dataloader()):
+        batch.to(device)
+        outputs = model.predict_step(batch)
+        data_handler.update_with_inference_outputs(outputs)
+
+    updated_las_path = data_handler.interpolate_and_save()
+
     return updated_las_path
 
 
