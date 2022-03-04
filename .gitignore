@@ -2,6 +2,7 @@
 nohup.out
 outputs/
 bash/schedule/*
+multirun/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
