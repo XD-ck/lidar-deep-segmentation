@@ -5,6 +5,7 @@ import laspy
 import numpy as np
 import torch
 from torch_geometric.nn.pool import knn
+from torch_geometric.nn.unpool import knn_interpolate
 from torch.distributions import Categorical
 
 from lidar_multiclass.utils import utils
@@ -67,10 +68,10 @@ class Interpolator:
                     self.interpolate_and_save()
                 self._load_las_for_classification_update(las_filepath)
             idx_x = batch.batch_x == batch_idx
-            self.updates_logits_subsampled.append(batch_logits[idx_x])
-            self.updates_pos_subsampled.append(batch.pos_copy_subsampled[idx_x])
+            self.logits_u_sub.append(batch_logits[idx_x])
+            self.pos_u_sub.append(batch.pos_copy_subsampled[idx_x])
             idx_y = batch.batch_y == batch_idx
-            self.updates_pos.append(batch.pos_copy[idx_y])
+            self.pos_u.append(batch.pos_copy[idx_y])
 
     def _load_las_for_classification_update(self, filepath):
         """Load a LAS and add necessary extradim."""
@@ -92,7 +93,7 @@ class Interpolator:
             self.las.add_extra_dim(param)
             self.las[class_name][:] = 0.0
 
-        self.las_pos = torch.from_numpy(
+        self.pos = torch.from_numpy(
             np.asarray(
                 [
                     self.las.x,
@@ -102,9 +103,9 @@ class Interpolator:
                 dtype=np.float32,
             ).transpose()
         )
-        self.updates_logits_subsampled = []
-        self.updates_pos_subsampled = []
-        self.updates_pos = []
+        self.logits_u_sub = []
+        self.pos_u_sub = []
+        self.pos_u = []
 
     @torch.no_grad()
     def interpolate_and_save(self):
@@ -120,63 +121,40 @@ class Interpolator:
         log.info(f"Updated LAS will be saved to {self.output_path}")
 
         # Cat
-        self.updates_pos = torch.cat(self.updates_pos).cpu()
-        self.updates_pos_subsampled = torch.cat(self.updates_pos_subsampled).cpu()
-        self.updates_logits_subsampled = torch.cat(self.updates_logits_subsampled).cpu()
+        self.pos_u = torch.cat(self.pos_u).cpu()
+        self.pos_u_sub = torch.cat(self.pos_u_sub).cpu()
+        self.logits_u_sub = torch.cat(self.logits_u_sub).cpu()
 
         if self.test_time_augmentation:
             # TODO: get a unique value by position for self.update_logits
 
             pass
-
-        # Here create missing channels
-        self.updates_classification_subsampled = torch.argmax(
-            self.updates_logits_subsampled, dim=1
+        self.logits_u = knn_interpolate(
+            self.logits_u_sub,
+            self.pos_u_sub,
+            self.pos,
+            batch_x=None,
+            batch_y=None,
+            k=5,
+            num_workers=4,
         )
-        self.updates_probas_subsampled = self.softmax(self.updates_logits_subsampled)
-        self.updates_entropy_subsampled = Categorical(
-            probs=self.updates_probas_subsampled
-        ).entropy()
 
+        # Here create missing elements
+        self.preds_u = torch.argmax(self.logits_u, dim=1)
+        self.probas_u = self.softmax(self.logits_u)
+        self.entropy_u = Categorical(probs=self.probas_u).entropy()
         # Remap predictions to good classification codes
-        self.updates_classification_subsampled = np.vectorize(
-            self.reverse_classification_mapper.get
-        )(self.updates_classification_subsampled)
-        self.updates_classification_subsampled = torch.from_numpy(
-            self.updates_classification_subsampled
+        self.preds_u = np.vectorize(self.reverse_classification_mapper.get)(
+            self.preds_u
         )
+        self.preds_u = torch.from_numpy(self.preds_u)
 
-        # Find nn among points with predictions for all points
-        assign_idx = knn(
-            self.updates_pos_subsampled,
-            self.las_pos,
-            k=1,
-            num_workers=1,
-        )[1]
-
-        # Interpolate predictions
-        self.updates_classification = self.updates_classification_subsampled[assign_idx]
-        self.updates_probas = self.updates_probas_subsampled[assign_idx]
-        if len(self.updates_entropy_subsampled):
-            self.updates_entropy = self.updates_entropy_subsampled[assign_idx]
-
-        # Only update channels for points with a predicted point that is close enough
-        nn_pos = self.updates_pos_subsampled[assign_idx]
-        euclidian_distance = torch.sqrt(((self.las_pos - nn_pos) ** 2).sum(axis=1))
-        INTERPOLATION_RADIUS = 2.5
-        close_enough_with_preds = euclidian_distance < INTERPOLATION_RADIUS
-
+        # ASSIGN
         for class_idx_in_tensor, class_name in enumerate(self.names_of_probas_to_save):
-            self.las[class_name][close_enough_with_preds] = self.updates_probas[
-                close_enough_with_preds, class_idx_in_tensor
-            ]
-        self.las[self.PredictedClassification][
-            close_enough_with_preds
-        ] = self.updates_classification[close_enough_with_preds]
-        if len(self.updates_entropy):
-            self.las[self.ProbasEntropy][
-                close_enough_with_preds
-            ] = self.updates_entropy[close_enough_with_preds]
+            self.las[class_name] = self.probas_u[:, class_idx_in_tensor]
+        self.las[self.PredictedClassification] = self.preds_u
+        if len(self.entropy_u):
+            self.las[self.ProbasEntropy] = self.entropy_u
 
         log.info(f"Saving...")
         self.las.write(self.output_path)
@@ -185,11 +163,12 @@ class Interpolator:
         # Clean-up - get rid of current data to go easy on memory
         self.current_las_filepath = ""
         del self.las
-        del self.las_pos
-        del self.updates_pos_subsampled
-        del self.updates_pos
-        del self.updates_classification_subsampled
-        del self.updates_classification
-        del self.updates_logits_subsampled
+        del self.pos
+        del self.pos_u_sub
+        del self.pos_u
+        del self.preds_u
+        del self.entropy_u
+        del self.probas_u
+        del self.logits_u_sub
 
         return self.output_path
