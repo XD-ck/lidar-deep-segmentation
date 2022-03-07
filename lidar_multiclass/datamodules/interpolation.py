@@ -170,7 +170,7 @@ class Interpolator:
             self.las[class_name][close_enough_with_preds] = self.updates_probas[
                 close_enough_with_preds, class_idx_in_tensor
             ]
-        self.las[ChannelNames.PredictedClassification.value][
+        self.las[self.PredictedClassification][
             close_enough_with_preds
         ] = self.updates_classification[close_enough_with_preds]
         if len(self.updates_entropy):

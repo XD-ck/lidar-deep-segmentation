@@ -28,11 +28,21 @@ def main(config: DictConfig):
     datamodule: LightningDataModule = hydra.utils.instantiate(config.datamodule)
 
     # METHOD 1
+    config.predict.names_of_probas_to_save = [
+        a + "_A" for a in config.predict.names_of_probas_to_save
+    ]
+    datamodule.dataset_description["classification_dict"] = {
+        k: v + "_A"
+        for k, v in datamodule.dataset_description.get("classification_dict").items()
+    }
     datamodule._set_predict_data([config.predict.src_las])
     data_handler = Interpolator(
         config.predict.output_dir,
         datamodule.dataset_description.get("classification_dict"),
         names_of_probas_to_save=config.predict.names_of_probas_to_save,
+        test_time_augmentation=False,
+        PredictedClassification="preds_A",
+        ProbasEntropy="entropy_A",
     )
     for batch in tqdm(datamodule.predict_dataloader()):
         batch.to(device)
@@ -42,12 +52,11 @@ def main(config: DictConfig):
     updated_las_path = data_handler.interpolate_and_save()
 
     # METHOD 2 - test_time_augmentation=True
-    c_names = [
-        a.replace("NoShiftSubset", "Shift")
-        for a in config.predict.names_of_probas_to_save
+    config.predict.names_of_probas_to_save = [
+        a.replace("_A", "_B") for a in config.predict.names_of_probas_to_save
     ]
     datamodule.dataset_description["classification_dict"] = {
-        k: v.replace("NoShiftSubset", "Shift")
+        k: v.replace("_A", "_B")
         for k, v in datamodule.dataset_description.get("classification_dict").items()
     }
 
@@ -57,10 +66,10 @@ def main(config: DictConfig):
     data_handler = Interpolator(
         config.predict.output_dir,
         datamodule.dataset_description.get("classification_dict"),
-        names_of_probas_to_save=c_names,
+        names_of_probas_to_save=config.predict.names_of_probas_to_save,
         test_time_augmentation=True,
-        PredictedClassification="ShiftSUbset_PredictedClassification",
-        ProbasEntropy="ShiftSUbset_entropy",
+        PredictedClassification="preds_B",
+        ProbasEntropy="entropy_B",
     )
     for batch in tqdm(datamodule.predict_dataloader()):
         batch.to(device)
