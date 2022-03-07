@@ -135,7 +135,7 @@ class Interpolator:
             self.pos,
             batch_x=None,
             batch_y=None,
-            k=5,
+            k=10,
             num_workers=4,
         )
 

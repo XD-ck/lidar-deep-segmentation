@@ -257,7 +257,7 @@ class LidarIterableDataset(IterableDataset):
         self.target_transform = target_transform
         self.subtile_width_meters = subtile_width_meters
         self.subtiles_overlap = subtiles_overlap
-        assert self.subtiles_overlap < (0.8 * self.subtile_width_meters)
+        assert self.subtiles_overlap <= (0.9 * self.subtile_width_meters)
 
     @utils.eval_time
     def yield_transformed_subtile_data(self):
